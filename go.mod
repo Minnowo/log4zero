@@ -1,6 +1,6 @@
 module github.com/minnowo/log4zero
 
-go 1.24.5
+go 1.17
 
 require github.com/rs/zerolog v1.34.0
 
