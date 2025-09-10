@@ -11,6 +11,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+type LogCreator func(name string, level zerolog.Level, writer io.Writer, color bool) *zerolog.Logger
+
 // LoggerConfig defines per-logger config.
 type LoggerConfig struct {
 	Level string `json:"level"`
@@ -56,6 +58,12 @@ func Init(configPath string) error {
 		return fmt.Errorf("could not decode config: %w", err)
 	}
 
+	return InitWith(cfg, GetNew)
+}
+
+// InitWith populates and updates the LoggerRegistry with loggers from the given config using the given creation function.
+func InitWith(cfg Config, createFunc LogCreator) error {
+
 	for name, loggerCfg := range cfg.Loggers {
 
 		level, err := zerolog.ParseLevel(loggerCfg.Level)
@@ -77,7 +85,11 @@ func Init(configPath string) error {
 			writer = f
 		}
 
-		newLogger := getDefault(name, level, writer, loggerCfg.Color)
+		newLogger := createFunc(name, level, writer, loggerCfg.Color)
+
+		if newLogger == nil {
+			return fmt.Errorf("got nil logger from creation function")
+		}
 
 		if existingLogger, ok := LoggerRegistry[name]; ok {
 			*existingLogger = *newLogger
@@ -101,18 +113,26 @@ func GetL(name string, level zerolog.Level) *zerolog.Logger {
 		return logger
 	}
 
-	logger := getDefault(name, level, os.Stdout, true)
+	logger := GetNew(name, level, os.Stdout, true)
 
 	LoggerRegistry[name] = logger
 
 	return logger
 }
 
-func getDefault(name string, level zerolog.Level, writer io.Writer, color bool) *zerolog.Logger {
+// GetNew creates a new logger
+func GetNew(name string, level zerolog.Level, writer io.Writer, color bool) *zerolog.Logger {
 
 	writer = zerolog.ConsoleWriter{Out: writer, NoColor: !color}
 
-	logger := log.Output(writer).Level(level).With().Caller().Str("logger", name).Logger()
+	ctx := log.Output(writer).Level(level).With().Caller()
+
+	if name != "" {
+		ctx = ctx.Str("logger", name)
+	}
+
+	logger := ctx.Logger()
+
 	logger.Debug().Msg("logger created")
 
 	return &logger
