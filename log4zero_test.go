@@ -27,7 +27,7 @@ func TestInitConsoleLog(t *testing.T) {
 			name: {
 				Level: "info",
 				File:  "",
-				Color: true,
+				Color: ColorOn,
 			},
 		},
 	}
@@ -49,7 +49,7 @@ func TestInitFileLog(t *testing.T) {
 			name: {
 				Level: "info",
 				File:  file,
-				Color: true,
+				Color: ColorOn,
 			},
 		},
 	}
@@ -76,7 +76,7 @@ func TestInitWithCustomLog(t *testing.T) {
 			name: {
 				Level: "info",
 				File:  file,
-				Color: true,
+				Color: ColorOn,
 			},
 		},
 	}
@@ -120,7 +120,7 @@ func TestInitManyTimes(t *testing.T) {
 			name: {
 				Level: "debug",
 				File:  file,
-				Color: false,
+				Color: ColorOff,
 			},
 		},
 	}, GetNew)
@@ -134,7 +134,7 @@ func TestInitManyTimes(t *testing.T) {
 			name: {
 				Level: "error",
 				File:  file,
-				Color: false,
+				Color: ColorOff,
 			},
 		},
 	}, GetNew)
@@ -221,7 +221,7 @@ func TestWriteConfigDumpsAllLoggers(t *testing.T) {
 
 	err := InitWith(Config{
 		Loggers: map[string]LoggerConfig{
-			"dump_configured": {Level: "DEBUG", File: file, Color: false, Format: "json"},
+			"dump_configured": {Level: "DEBUG", File: file, Color: ColorOff, Format: "json"},
 		},
 	}, discardCreator)
 	if err != nil {
@@ -242,8 +242,8 @@ func TestWriteConfigDumpsAllLoggers(t *testing.T) {
 
 	want := Config{
 		Loggers: map[string]LoggerConfig{
-			"dump_default":    {Level: "info", Color: true},
-			"dump_configured": {Level: "debug", File: file, Color: false, Format: "json"},
+			"dump_default":    {Level: "info", Color: ColorAuto},
+			"dump_configured": {Level: "debug", File: file, Color: ColorOff, Format: "json"},
 		},
 	}
 

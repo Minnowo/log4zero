@@ -41,7 +41,7 @@ The configuration file looks something like:
         },
         "<your-logger2-name>": {
             "level": "info",
-            "color": true
+            "color": "auto"
         }
     }
 }
@@ -56,7 +56,17 @@ and `format` is case-sensitive.
 | `level`  |           | `trace`, `debug`, `info`, `warn`, `error`, `fatal`, ...    |
 | `file`   | stdout    | Append log output to this file                             |
 | `format` | `console` | `console` for human-readable text, `json` for JSON lines   |
-| `color`  | `false`   | Colorize `console` output; ignored for `json`              |
+| `color`  | `false`   | `true`, `false` or `"auto"`; colors `console` output only  |
+
+`"auto"` colors output only when it goes to a terminal, so log files and
+piped output stay plain. It also turns color off when the `NO_COLOR`
+environment variable is non-empty or `TERM=dumb`. The check happens when the
+logger is created, so setting `NO_COLOR` later has no effect until `Init`
+runs. Loggers from `Get` that have no config entry use `"auto"`.
+
+On Windows, `"auto"` treats any console as color-capable, so a legacy console
+without ANSI support shows raw escape codes. Terminals that talk through a
+pipe, such as mintty / Git Bash, get no color.
 
 Unknown fields are an error, so a typo such as `"levle"` makes `Init` fail
 instead of being silently ignored.
