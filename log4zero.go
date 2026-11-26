@@ -41,22 +41,26 @@ type registryEntry struct {
 var registryMu sync.Mutex
 var registry = map[string]*registryEntry{}
 
+// once and onceErr hold InitOnce's state. onceErr is written inside once.Do,
+// which orders it before every later read.
 var once sync.Once
+var onceErr error
 
 // InitOnce initializes zerolog loggers from a JSON config file.
 // This function uses a sync.Once to call Init, so it only ever works once.
+// Every call returns the first call's error (nil on success); configPath is
+// ignored after the first call. Safe for concurrent use.
 func InitOnce(configPath string) error {
 
-	var err error
-
 	once.Do(func() {
-		err = Init(configPath)
+		onceErr = Init(configPath)
 	})
 
-	return err
+	return onceErr
 }
 
 // Init populates and updates the logger registry with loggers from the given config file.
+// Unknown fields in the file are an error, so typos do not pass silently.
 func Init(configPath string) error {
 
 	file, err := os.Open(configPath)
@@ -68,7 +72,12 @@ func Init(configPath string) error {
 
 	var cfg Config
 
-	if err := json.NewDecoder(file).Decode(&cfg); err != nil {
+	decoder := json.NewDecoder(file)
+
+	// A misspelled field would otherwise be silently ignored.
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&cfg); err != nil {
 		return fmt.Errorf("could not decode config: %w", err)
 	}
 

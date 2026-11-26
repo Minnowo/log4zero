@@ -47,7 +47,8 @@ The configuration file looks something like:
 }
 ```
 
-The `color` and `file` fields are optional.
+The `color` and `file` fields are optional. Unknown fields are an error, so a
+typo such as `"levle"` makes `Init` fail instead of being silently ignored.
 
 
 ## Discovering loggers

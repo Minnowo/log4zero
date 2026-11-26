@@ -299,6 +299,48 @@ func TestWriteConfigRoundTripsCustomLevelNames(t *testing.T) {
 	}
 }
 
+// A misspelled field in the config file must be an error, not silently
+// ignored, at both the top level and inside a logger entry.
+func TestInitRejectsUnknownFields(t *testing.T) {
+
+	useEmptyRegistry(t)
+
+	cases := map[string]string{
+		"logger field": `{"loggers": {"typo": {"levle": "debug"}}}`,
+		"top level":    `{"logers": {"typo": {"level": "debug"}}}`,
+	}
+
+	for name, content := range cases {
+
+		configPath := path.Join(t.TempDir(), "config.json")
+
+		if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		if err := Init(configPath); err == nil {
+			t.Errorf("%s: Init accepted unknown field in %s", name, content)
+		}
+	}
+}
+
+// InitOnce must keep reporting the first call's error on later calls,
+// otherwise a caller that checks only a later call never sees the failure.
+func TestInitOnceRepeatsFirstError(t *testing.T) {
+
+	useFreshOnce(t)
+
+	missing := path.Join(t.TempDir(), "missing.json")
+
+	if err := InitOnce(missing); err == nil {
+		t.Fatalf("first InitOnce with missing file returned nil")
+	}
+
+	if err := InitOnce(missing); err == nil {
+		t.Errorf("second InitOnce returned nil after first call failed")
+	}
+}
+
 // discardCreator is a LogCreator that drops all output, to keep test logs quiet.
 func discardCreator(name string, level zerolog.Level, writer io.Writer, color bool) *zerolog.Logger {
 	logger := zerolog.New(io.Discard).Level(level)
@@ -318,5 +360,18 @@ func useEmptyRegistry(t *testing.T) {
 		registryMu.Lock()
 		registry = saved
 		registryMu.Unlock()
+	})
+}
+
+// useFreshOnce resets InitOnce's state so the test sees a first call, and
+// resets it again when the test ends.
+func useFreshOnce(t *testing.T) {
+
+	once = sync.Once{}
+	onceErr = nil
+
+	t.Cleanup(func() {
+		once = sync.Once{}
+		onceErr = nil
 	})
 }
