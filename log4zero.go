@@ -14,13 +14,31 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type LogCreator func(name string, level zerolog.Level, writer io.Writer, color bool) *zerolog.Logger
+// Values for LoggerConfig.Format. An empty Format means FormatConsole.
+const (
+	// FormatConsole writes human-readable text, colored according to Color.
+	FormatConsole = "console"
+
+	// FormatJSON writes one JSON object per line and ignores Color.
+	FormatJSON = "json"
+)
+
+// LogCreator builds a logger for one config entry. cfg is the entry as written
+// in the config (Level not normalized), level is cfg.Level parsed, and writer
+// is the opened cfg.File, or stdout if File is empty. cfg.Format is
+// already validated. It must not return nil.
+type LogCreator func(name string, level zerolog.Level, writer io.Writer, cfg LoggerConfig) *zerolog.Logger
 
 // LoggerConfig defines per-logger config.
+//
+// Format is "console" (the default when empty), which is human-readable and
+// colored if Color is set, or "json", which writes one JSON object per line
+// and ignores Color.
 type LoggerConfig struct {
-	Level string `json:"level"`
-	File  string `json:"file,omitempty"`
-	Color bool   `json:"color,omitempty"`
+	Level  string `json:"level"`
+	File   string `json:"file,omitempty"`
+	Color  bool   `json:"color,omitempty"`
+	Format string `json:"format,omitempty"`
 }
 
 // Config defines the overall config structure.
@@ -95,6 +113,10 @@ func InitWith(cfg Config, createFunc LogCreator) error {
 			return fmt.Errorf("invalid level for %s: %w", name, err)
 		}
 
+		if loggerCfg.Format != "" && loggerCfg.Format != FormatConsole && loggerCfg.Format != FormatJSON {
+			return fmt.Errorf("invalid format for %s: %q, want %q or %q", name, loggerCfg.Format, FormatConsole, FormatJSON)
+		}
+
 		var writer io.Writer = os.Stdout
 
 		if loggerCfg.File != "" {
@@ -108,7 +130,7 @@ func InitWith(cfg Config, createFunc LogCreator) error {
 			writer = f
 		}
 
-		newLogger := createFunc(name, level, writer, loggerCfg.Color)
+		newLogger := createFunc(name, level, writer, loggerCfg)
 
 		if newLogger == nil {
 			return fmt.Errorf("got nil logger from creation function")
@@ -151,12 +173,11 @@ func GetL(name string, level zerolog.Level) *zerolog.Logger {
 		return existing.logger
 	}
 
-	logger := GetNew(name, level, os.Stdout, true)
+	cfg := LoggerConfig{Level: zerolog.LevelFieldMarshalFunc(level), Color: true}
 
-	registry[name] = &registryEntry{
-		logger: logger,
-		config: LoggerConfig{Level: zerolog.LevelFieldMarshalFunc(level), Color: true},
-	}
+	logger := GetNew(name, level, os.Stdout, cfg)
+
+	registry[name] = &registryEntry{logger: logger, config: cfg}
 
 	return logger
 }
@@ -170,7 +191,7 @@ func GetL(name string, level zerolog.Level) *zerolog.Logger {
 // loggers fetched lazily inside functions are missing until first use.
 // Package-level `var logger = log4zero.Get(...)` loggers are always present.
 //
-// Only level, file and color are recorded. A logger built by InitWith with a
+// Only the LoggerConfig fields are recorded. A logger built by InitWith with a
 // custom LogCreator is reported by those fields alone, and reloading the dump
 // through Init rebuilds it with GetNew.
 func CurrentConfig() Config {
@@ -202,10 +223,15 @@ func WriteConfig(w io.Writer) error {
 	return nil
 }
 
-// GetNew creates a new logger
-func GetNew(name string, level zerolog.Level, writer io.Writer, color bool) *zerolog.Logger {
+// GetNew is the default LogCreator. It returns a logger at the given level
+// that writes to writer with caller info and, if name is not empty, a
+// logger=<name> field. cfg.Format "json" writes raw JSON lines; any other
+// value writes console text (InitWith rejects unknown formats beforehand).
+func GetNew(name string, level zerolog.Level, writer io.Writer, cfg LoggerConfig) *zerolog.Logger {
 
-	writer = zerolog.ConsoleWriter{Out: writer, NoColor: !color}
+	if cfg.Format != FormatJSON {
+		writer = zerolog.ConsoleWriter{Out: writer, NoColor: !cfg.Color}
+	}
 
 	ctx := log.Output(writer).Level(level).With().Caller()
 

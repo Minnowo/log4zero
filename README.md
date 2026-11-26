@@ -36,19 +36,30 @@ The configuration file looks something like:
     "loggers": {
         "<your-logger1-name>": {
             "level": "debug",
-            "color": false,
-            "file" : "./main.log"
+            "file" : "./main.log",
+            "format": "json"
         },
         "<your-logger2-name>": {
             "level": "info",
-            "color": true,
+            "color": true
         }
     }
 }
 ```
 
-The `color` and `file` fields are optional. Unknown fields are an error, so a
-typo such as `"levle"` makes `Init` fail instead of being silently ignored.
+Always set `level`: an omitted level is not an error, but the logger then
+drops nearly everything. The other fields are optional. Values are lowercase
+and `format` is case-sensitive.
+
+| Field    | Default   | Meaning                                                    |
+|----------|-----------|------------------------------------------------------------|
+| `level`  |           | `trace`, `debug`, `info`, `warn`, `error`, `fatal`, ...    |
+| `file`   | stdout    | Append log output to this file                             |
+| `format` | `console` | `console` for human-readable text, `json` for JSON lines   |
+| `color`  | `false`   | Colorize `console` output; ignored for `json`              |
+
+Unknown fields are an error, so a typo such as `"levle"` makes `Init` fail
+instead of being silently ignored.
 
 
 ## Discovering loggers

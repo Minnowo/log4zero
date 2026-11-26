@@ -81,12 +81,15 @@ func TestInitWithCustomLog(t *testing.T) {
 		},
 	}
 
-	InitWith(config, func(name string, level zerolog.Level, writer io.Writer, color bool) *zerolog.Logger {
+	err := InitWith(config, func(name string, level zerolog.Level, writer io.Writer, cfg LoggerConfig) *zerolog.Logger {
 
 		logger := log.Output(zerolog.MultiLevelWriter(writer, os.Stdout)).Level(level)
 
 		return &logger
 	})
+	if err != nil {
+		t.Fatalf("InitWith failed: %v", err)
+	}
 
 	logger := Get(name)
 	logger.Error().Msg("hello world")
@@ -218,7 +221,7 @@ func TestWriteConfigDumpsAllLoggers(t *testing.T) {
 
 	err := InitWith(Config{
 		Loggers: map[string]LoggerConfig{
-			"dump_configured": {Level: "DEBUG", File: file, Color: false},
+			"dump_configured": {Level: "DEBUG", File: file, Color: false, Format: "json"},
 		},
 	}, discardCreator)
 	if err != nil {
@@ -240,7 +243,7 @@ func TestWriteConfigDumpsAllLoggers(t *testing.T) {
 	want := Config{
 		Loggers: map[string]LoggerConfig{
 			"dump_default":    {Level: "info", Color: true},
-			"dump_configured": {Level: "debug", File: file, Color: false},
+			"dump_configured": {Level: "debug", File: file, Color: false, Format: "json"},
 		},
 	}
 
@@ -341,8 +344,91 @@ func TestInitOnceRepeatsFirstError(t *testing.T) {
 	}
 }
 
+// With format "json" every line in the log file is a JSON object carrying the
+// message and logger name. Without a format, or with "console", the output is
+// console text.
+func TestFormatSelectsOutput(t *testing.T) {
+
+	useEmptyRegistry(t)
+
+	dir := t.TempDir()
+	jsonFile := path.Join(dir, "json.log")
+	consoleFile := path.Join(dir, "console.log")
+	explicitFile := path.Join(dir, "explicit.log")
+
+	err := InitWith(Config{
+		Loggers: map[string]LoggerConfig{
+			"format_json":     {Level: "info", File: jsonFile, Format: "json"},
+			"format_console":  {Level: "info", File: consoleFile},
+			"format_explicit": {Level: "info", File: explicitFile, Format: "console"},
+		},
+	}, GetNew)
+	if err != nil {
+		t.Fatalf("InitWith failed: %v", err)
+	}
+
+	Get("format_json").Info().Msg("hello json")
+	Get("format_console").Info().Msg("hello console")
+	Get("format_explicit").Info().Msg("hello console")
+
+	lines := readLines(t, jsonFile)
+
+	if len(lines) != 1 {
+		t.Fatalf("want 1 line in json log, got %d: %q", len(lines), lines)
+	}
+
+	var record map[string]interface{}
+
+	if err := json.Unmarshal([]byte(lines[0]), &record); err != nil {
+		t.Fatalf("json log line is not JSON: %v: %q", err, lines[0])
+	}
+
+	if record["message"] != "hello json" || record["logger"] != "format_json" {
+		t.Errorf("json log line missing message or logger: %q", lines[0])
+	}
+
+	for _, file := range []string{consoleFile, explicitFile} {
+
+		lines = readLines(t, file)
+
+		if len(lines) != 1 {
+			t.Fatalf("want 1 line in %s, got %d: %q", file, len(lines), lines)
+		}
+
+		if json.Valid([]byte(lines[0])) || !strings.Contains(lines[0], "hello console") {
+			t.Errorf("%s line is not console text: %q", file, lines[0])
+		}
+	}
+}
+
+// An unknown format is a config error, reported before the log file is
+// created.
+func TestInitWithRejectsUnknownFormat(t *testing.T) {
+
+	useEmptyRegistry(t)
+
+	file := path.Join(t.TempDir(), "never.log")
+
+	err := InitWith(Config{
+		Loggers: map[string]LoggerConfig{
+			"format_bad": {Level: "info", File: file, Format: "xml"},
+		},
+	}, GetNew)
+	if err == nil {
+		t.Fatalf("InitWith accepted format \"xml\"")
+	}
+
+	if !strings.Contains(err.Error(), "invalid format") {
+		t.Errorf("error is not about the format: %v", err)
+	}
+
+	if _, statErr := os.Stat(file); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("log file was created despite bad format: %v", statErr)
+	}
+}
+
 // discardCreator is a LogCreator that drops all output, to keep test logs quiet.
-func discardCreator(name string, level zerolog.Level, writer io.Writer, color bool) *zerolog.Logger {
+func discardCreator(name string, level zerolog.Level, writer io.Writer, cfg LoggerConfig) *zerolog.Logger {
 	logger := zerolog.New(io.Discard).Level(level)
 	return &logger
 }
@@ -374,4 +460,26 @@ func useFreshOnce(t *testing.T) {
 		once = sync.Once{}
 		onceErr = nil
 	})
+}
+
+// readLines returns the non-empty lines of a file, failing the test if it
+// cannot be read.
+func readLines(t *testing.T, file string) []string {
+
+	t.Helper()
+
+	content, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("failed to read %s: %v", file, err)
+	}
+
+	var lines []string
+
+	for _, line := range strings.Split(string(content), "\n") {
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+
+	return lines
 }
