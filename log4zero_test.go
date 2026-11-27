@@ -1,11 +1,14 @@
+// Tests for logger registration and config loading.
 package log4zero
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -157,4 +160,61 @@ func TestInitManyTimes(t *testing.T) {
 		t.Errorf("error log after setting level to error should appear")
 	}
 
+}
+
+// Get and InitWith are called from many goroutines at once. Run with -race;
+// any unsynchronized access to the registry is reported as a failure.
+func TestConcurrentGetAndInit(t *testing.T) {
+
+	useEmptyRegistry(t)
+
+	const workers = 8
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < workers; i++ {
+
+		name := fmt.Sprintf("concurrent_%d", i)
+
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			Get(name)
+		}()
+
+		go func() {
+			defer wg.Done()
+			err := InitWith(Config{
+				Loggers: map[string]LoggerConfig{name: {Level: "warn"}},
+			}, discardCreator)
+			if err != nil {
+				t.Errorf("InitWith failed: %v", err)
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
+// discardCreator is a LogCreator that drops all output, to keep test logs quiet.
+func discardCreator(name string, level zerolog.Level, writer io.Writer, color bool) *zerolog.Logger {
+	logger := zerolog.New(io.Discard).Level(level)
+	return &logger
+}
+
+// useEmptyRegistry gives the test an empty logger registry and restores the
+// previous one when the test ends, so registry contents are deterministic.
+func useEmptyRegistry(t *testing.T) {
+
+	registryMu.Lock()
+	saved := registry
+	registry = map[string]*zerolog.Logger{}
+	registryMu.Unlock()
+
+	t.Cleanup(func() {
+		registryMu.Lock()
+		registry = saved
+		registryMu.Unlock()
+	})
 }

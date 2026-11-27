@@ -1,3 +1,5 @@
+// Package log4zero provides named zerolog loggers that are configured at
+// runtime from a JSON file.
 package log4zero
 
 import (
@@ -25,8 +27,15 @@ type Config struct {
 	Loggers map[string]LoggerConfig `json:"loggers"`
 }
 
-// LoggerRegistry holds named loggers.
-var LoggerRegistry = map[string]*zerolog.Logger{}
+// registry holds named loggers. The pointers are handed to users and must
+// never be replaced, only overwritten in place, so that existing holders see
+// config changes.
+//
+// registryMu guards registry. It is never held while calling a user-supplied
+// LogCreator, so a creator may safely call Get.
+var registryMu sync.Mutex
+var registry = map[string]*zerolog.Logger{}
+
 var once sync.Once
 
 // InitOnce initializes zerolog loggers from a JSON config file.
@@ -42,7 +51,7 @@ func InitOnce(configPath string) error {
 	return err
 }
 
-// Init populates and updates the LoggerRegistry with loggers from the given config file.
+// Init populates and updates the logger registry with loggers from the given config file.
 func Init(configPath string) error {
 
 	file, err := os.Open(configPath)
@@ -61,7 +70,7 @@ func Init(configPath string) error {
 	return InitWith(cfg, GetNew)
 }
 
-// InitWith populates and updates the LoggerRegistry with loggers from the given config using the given creation function.
+// InitWith populates and updates the logger registry with loggers from the given config using the given creation function.
 func InitWith(cfg Config, createFunc LogCreator) error {
 
 	for name, loggerCfg := range cfg.Loggers {
@@ -91,11 +100,15 @@ func InitWith(cfg Config, createFunc LogCreator) error {
 			return fmt.Errorf("got nil logger from creation function")
 		}
 
-		if existingLogger, ok := LoggerRegistry[name]; ok {
+		registryMu.Lock()
+
+		if existingLogger, ok := registry[name]; ok {
 			*existingLogger = *newLogger
 		} else {
-			LoggerRegistry[name] = newLogger
+			registry[name] = newLogger
 		}
+
+		registryMu.Unlock()
 	}
 
 	return nil
@@ -106,16 +119,21 @@ func Get(name string) *zerolog.Logger {
 	return GetL(name, zerolog.InfoLevel)
 }
 
-// Get returns a logger for a name with the given default level if not found.
+// GetL returns a logger for a name, or registers and returns a new colored
+// stdout logger at the given level if the name is not registered yet.
+// Safe for concurrent use.
 func GetL(name string, level zerolog.Level) *zerolog.Logger {
 
-	if logger, ok := LoggerRegistry[name]; ok {
+	registryMu.Lock()
+	defer registryMu.Unlock()
+
+	if logger, ok := registry[name]; ok {
 		return logger
 	}
 
 	logger := GetNew(name, level, os.Stdout, true)
 
-	LoggerRegistry[name] = logger
+	registry[name] = logger
 
 	return logger
 }
