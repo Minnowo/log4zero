@@ -247,7 +247,5 @@ func GetNew(name string, level zerolog.Level, writer io.Writer, cfg LoggerConfig
 
 	logger := ctx.Logger()
 
-	logger.Debug().Msg("logger created")
-
 	return &logger
 }
