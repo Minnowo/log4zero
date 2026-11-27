@@ -1,5 +1,6 @@
 // Package log4zero provides named zerolog loggers that are configured at
-// runtime from a JSON file.
+// runtime from a JSON file, plus a way to dump every registered logger as a
+// config so users can discover what exists.
 package log4zero
 
 import (
@@ -27,14 +28,18 @@ type Config struct {
 	Loggers map[string]LoggerConfig `json:"loggers"`
 }
 
-// registry holds named loggers. The pointers are handed to users and must
-// never be replaced, only overwritten in place, so that existing holders see
-// config changes.
-//
+// registryEntry is one named logger and the config it was last built from.
+// The logger pointer is handed to users and must never be replaced, only
+// overwritten in place, so that existing holders see config changes.
+type registryEntry struct {
+	logger *zerolog.Logger
+	config LoggerConfig
+}
+
 // registryMu guards registry. It is never held while calling a user-supplied
 // LogCreator, so a creator may safely call Get.
 var registryMu sync.Mutex
-var registry = map[string]*zerolog.Logger{}
+var registry = map[string]*registryEntry{}
 
 var once sync.Once
 
@@ -100,12 +105,18 @@ func InitWith(cfg Config, createFunc LogCreator) error {
 			return fmt.Errorf("got nil logger from creation function")
 		}
 
+		storedCfg := loggerCfg
+		// Init parses levels with LevelFieldMarshalFunc, so store the name in
+		// that form for the dump to reload.
+		storedCfg.Level = zerolog.LevelFieldMarshalFunc(level)
+
 		registryMu.Lock()
 
-		if existingLogger, ok := registry[name]; ok {
-			*existingLogger = *newLogger
+		if existing, ok := registry[name]; ok {
+			*existing.logger = *newLogger
+			existing.config = storedCfg
 		} else {
-			registry[name] = newLogger
+			registry[name] = &registryEntry{logger: newLogger, config: storedCfg}
 		}
 
 		registryMu.Unlock()
@@ -127,15 +138,59 @@ func GetL(name string, level zerolog.Level) *zerolog.Logger {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 
-	if logger, ok := registry[name]; ok {
-		return logger
+	if existing, ok := registry[name]; ok {
+		return existing.logger
 	}
 
 	logger := GetNew(name, level, os.Stdout, true)
 
-	registry[name] = logger
+	registry[name] = &registryEntry{
+		logger: logger,
+		config: LoggerConfig{Level: zerolog.LevelFieldMarshalFunc(level), Color: true},
+	}
 
 	return logger
+}
+
+// CurrentConfig returns a snapshot of every registered logger and the config
+// it currently uses. Loggers created by Get/GetL without a config entry report
+// their default level, stdout and color. The returned Config is a copy and is
+// safe to modify. Safe for concurrent use.
+//
+// A logger appears only once Get/GetL/InitWith has run for its name, so
+// loggers fetched lazily inside functions are missing until first use.
+// Package-level `var logger = log4zero.Get(...)` loggers are always present.
+//
+// Only level, file and color are recorded. A logger built by InitWith with a
+// custom LogCreator is reported by those fields alone, and reloading the dump
+// through Init rebuilds it with GetNew.
+func CurrentConfig() Config {
+
+	registryMu.Lock()
+	defer registryMu.Unlock()
+
+	cfg := Config{Loggers: make(map[string]LoggerConfig, len(registry))}
+
+	for name, entry := range registry {
+		cfg.Loggers[name] = entry.config
+	}
+
+	return cfg
+}
+
+// WriteConfig writes CurrentConfig to w as indented JSON in the same format
+// Init reads, so the output can be saved and edited as a config file. Intended
+// for a CLI flag such as --dump-log-config. Returns any write error.
+func WriteConfig(w io.Writer) error {
+
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "    ")
+
+	if err := enc.Encode(CurrentConfig()); err != nil {
+		return fmt.Errorf("could not encode config: %w", err)
+	}
+
+	return nil
 }
 
 // GetNew creates a new logger

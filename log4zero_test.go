@@ -1,12 +1,15 @@
-// Tests for logger registration and config loading.
+// Tests for logger registration, config loading and config dumping.
 package log4zero
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -176,11 +179,16 @@ func TestConcurrentGetAndInit(t *testing.T) {
 
 		name := fmt.Sprintf("concurrent_%d", i)
 
-		wg.Add(2)
+		wg.Add(3)
 
 		go func() {
 			defer wg.Done()
 			Get(name)
+		}()
+
+		go func() {
+			defer wg.Done()
+			CurrentConfig()
 		}()
 
 		go func() {
@@ -197,6 +205,100 @@ func TestConcurrentGetAndInit(t *testing.T) {
 	wg.Wait()
 }
 
+// WriteConfig must list every registered logger, both ones created by Get
+// with defaults and ones set by InitWith, and its output must be loadable by
+// Init.
+func TestWriteConfigDumpsAllLoggers(t *testing.T) {
+
+	useEmptyRegistry(t)
+
+	file := path.Join(t.TempDir(), "dump.log")
+
+	Get("dump_default")
+
+	err := InitWith(Config{
+		Loggers: map[string]LoggerConfig{
+			"dump_configured": {Level: "DEBUG", File: file, Color: false},
+		},
+	}, discardCreator)
+	if err != nil {
+		t.Fatalf("InitWith failed: %v", err)
+	}
+
+	var buf bytes.Buffer
+
+	if err := WriteConfig(&buf); err != nil {
+		t.Fatalf("WriteConfig failed: %v", err)
+	}
+
+	var got Config
+
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("WriteConfig output is not valid JSON: %v\n%s", err, buf.String())
+	}
+
+	want := Config{
+		Loggers: map[string]LoggerConfig{
+			"dump_default":    {Level: "info", Color: true},
+			"dump_configured": {Level: "debug", File: file, Color: false},
+		},
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("dumped config mismatch\ngot:  %+v\nwant: %+v", got, want)
+	}
+
+	configPath := path.Join(t.TempDir(), "config.json")
+
+	if err := os.WriteFile(configPath, buf.Bytes(), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	if err := Init(configPath); err != nil {
+		t.Fatalf("Init could not load WriteConfig output: %v", err)
+	}
+
+	if reloaded := CurrentConfig(); !reflect.DeepEqual(reloaded, want) {
+		t.Errorf("config changed after reload\ngot:  %+v\nwant: %+v", reloaded, want)
+	}
+}
+
+// A dumped config must reload even when the app customizes level names,
+// because Init parses levels with zerolog.LevelFieldMarshalFunc.
+func TestWriteConfigRoundTripsCustomLevelNames(t *testing.T) {
+
+	useEmptyRegistry(t)
+
+	savedMarshal := zerolog.LevelFieldMarshalFunc
+	zerolog.LevelFieldMarshalFunc = func(l zerolog.Level) string {
+		return strings.ToUpper(l.String()[:3])
+	}
+	t.Cleanup(func() { zerolog.LevelFieldMarshalFunc = savedMarshal })
+
+	err := InitWith(Config{
+		Loggers: map[string]LoggerConfig{"custom_levels": {Level: "WAR"}},
+	}, discardCreator)
+	if err != nil {
+		t.Fatalf("InitWith failed: %v", err)
+	}
+
+	var buf bytes.Buffer
+
+	if err := WriteConfig(&buf); err != nil {
+		t.Fatalf("WriteConfig failed: %v", err)
+	}
+
+	var dumped Config
+
+	if err := json.Unmarshal(buf.Bytes(), &dumped); err != nil {
+		t.Fatalf("WriteConfig output is not valid JSON: %v", err)
+	}
+
+	if err := InitWith(dumped, discardCreator); err != nil {
+		t.Errorf("dumped config does not reload: %v\n%s", err, buf.String())
+	}
+}
+
 // discardCreator is a LogCreator that drops all output, to keep test logs quiet.
 func discardCreator(name string, level zerolog.Level, writer io.Writer, color bool) *zerolog.Logger {
 	logger := zerolog.New(io.Discard).Level(level)
@@ -209,7 +311,7 @@ func useEmptyRegistry(t *testing.T) {
 
 	registryMu.Lock()
 	saved := registry
-	registry = map[string]*zerolog.Logger{}
+	registry = map[string]*registryEntry{}
 	registryMu.Unlock()
 
 	t.Cleanup(func() {
